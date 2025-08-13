@@ -44,6 +44,36 @@ class PTSLogger {
         }
     }
     
+    // Log WebSocket errors
+    logWebSocketError(ptsId, error) {
+        try {
+            const timestamp = new Date().toISOString();
+            const logFileName = `WebSocketError_${timestamp.split('T')[0]}.log`;
+            const logFilePath = path.join(this.logDir, logFileName);
+            
+            const errorEntry = {
+                timestamp: timestamp,
+                ptsId: ptsId,
+                errorType: 'WebSocket',
+                errorCode: error.code || 'UNKNOWN',
+                errorMessage: error.message || 'Unknown error',
+                stack: error.stack || null,
+                additionalInfo: {
+                    name: error.name,
+                    code: error.code,
+                    statusCode: error['[Symbol(status-code)]']
+                }
+            };
+            
+            const logString = JSON.stringify(errorEntry, null, 2) + '\n' + '-'.repeat(80) + '\n';
+            fs.appendFileSync(logFilePath, logString);
+            
+            console.log(`[${timestamp}] WebSocket error logged to ${logFileName} for PTS ${ptsId}`);
+        } catch (logError) {
+            console.error('Error logging WebSocket error:', logError);
+        }
+    }
+    
     // Log pump transactions
     logPumpTransaction(ptsId, data) {
         this.logMessage('UploadPumpTransaction', ptsId, data);
@@ -97,6 +127,31 @@ class PTSLogger {
     // Log disconnection events
     logDisconnection(ptsId, data) {
         this.logMessage('Disconnection', ptsId, data);
+    }
+    
+    // Log protocol violations (like RSV1 errors)
+    logProtocolViolation(ptsId, violationType, details) {
+        try {
+            const timestamp = new Date().toISOString();
+            const logFileName = `ProtocolViolation_${timestamp.split('T')[0]}.log`;
+            const logFilePath = path.join(this.logDir, logFileName);
+            
+            const violationEntry = {
+                timestamp: timestamp,
+                ptsId: ptsId,
+                violationType: violationType,
+                details: details,
+                severity: 'WARNING',
+                note: 'This is common with PTS controllers and does not affect functionality'
+            };
+            
+            const logString = JSON.stringify(violationEntry, null, 2) + '\n' + '-'.repeat(80) + '\n';
+            fs.appendFileSync(logFilePath, logString);
+            
+            console.log(`[${timestamp}] Protocol violation logged to ${logFileName} for PTS ${ptsId}`);
+        } catch (logError) {
+            console.error('Error logging protocol violation:', logError);
+        }
     }
     
     // Get log file paths for monitoring

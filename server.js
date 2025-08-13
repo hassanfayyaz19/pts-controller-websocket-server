@@ -9,9 +9,14 @@ const app = express();
 const server = http.createServer(app);
 
 // Create WebSocket server with specific path for PTS controllers
+// Add perMessageDeflate: false to handle compression issues
 const wss = new WebSocket.Server({ 
     server,
-    path: '/ptsWebSocket'  // This is the URI path PTS controllers will use
+    path: '/ptsWebSocket',
+    perMessageDeflate: false,  // Disable compression to avoid protocol issues
+    maxPayload: 1024 * 1024,  // 1MB max payload
+    skipUTF8Validation: true,  // Skip UTF8 validation for binary data
+    clientTracking: true       // Enable client tracking
 });
 
 // Initialize logger
@@ -34,12 +39,38 @@ class PTSController {
         this.isAlive = true;
         this.lastPing = Date.now();
         this.pendingRequests = new Map();
+        this.connectionTime = Date.now();
         
         // Log connection
         logger.logConnection(ptsId, {
             firmwareVersion,
             configIdentifier,
             timestamp: new Date().toISOString()
+        });
+        
+        // Set up error handling for WebSocket
+        this.ws.on('error', (error) => {
+            console.error(`WebSocket error for PTS ${ptsId}:`, error.message);
+            
+            // Log the error but don't crash
+            if (error.code === 'WS_ERR_UNEXPECTED_RSV_1') {
+                console.log(`PTS ${ptsId} sent invalid WebSocket frame (RSV1 bit set) - this is common with PTS controllers`);
+                // Log protocol violation
+                logger.logProtocolViolation(ptsId, 'RSV1_BIT_SET', {
+                    errorCode: error.code,
+                    errorMessage: error.message,
+                    description: 'PTS controller sent WebSocket frame with RSV1 bit set (protocol violation)',
+                    impact: 'None - server continues to function normally'
+                });
+            } else if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+                console.log(`PTS ${ptsId} connection reset - this is normal for PTS controllers`);
+                // Log connection reset
+                logger.logWebSocketError(ptsId, error);
+            } else {
+                console.error(`Unexpected WebSocket error for PTS ${ptsId}:`, error);
+                // Log unexpected errors
+                logger.logWebSocketError(ptsId, error);
+            }
         });
         
         // Set up ping/pong handling
@@ -50,11 +81,18 @@ class PTSController {
         
         // Set up message handling
         this.ws.on('message', (data) => {
-            this.handleMessage(data);
+            try {
+                this.handleMessage(data);
+            } catch (error) {
+                console.error(`Error handling message from PTS ${ptsId}:`, error.message);
+                // Don't disconnect for message handling errors
+            }
         });
         
         // Set up connection close handling
-        this.ws.on('close', () => {
+        this.ws.on('close', (code, reason) => {
+            const duration = Date.now() - this.connectionTime;
+            console.log(`PTS Controller ${ptsId} disconnected after ${Math.round(duration/1000)}s (Code: ${code}, Reason: ${reason || 'No reason'})`);
             this.handleDisconnect();
         });
         
@@ -63,7 +101,17 @@ class PTSController {
     
     handleMessage(data) {
         try {
-            const message = JSON.parse(data.toString());
+            // Handle both string and buffer data
+            let messageStr;
+            if (Buffer.isBuffer(data)) {
+                messageStr = data.toString('utf8');
+            } else if (typeof data === 'string') {
+                messageStr = data;
+            } else {
+                messageStr = data.toString();
+            }
+            
+            const message = JSON.parse(messageStr);
             console.log(`Received from ${this.ptsId}:`, message);
             
             // Handle different message types based on the documentation
@@ -100,7 +148,8 @@ class PTSController {
                     this.sendErrorResponse(message.packetId || 0, 'Unknown message type');
             }
         } catch (error) {
-            console.error(`Error parsing message from ${this.ptsId}:`, error);
+            console.error(`Error parsing message from ${this.ptsId}:`, error.message);
+            console.error(`Raw data:`, data);
             this.sendErrorResponse(0, 'Invalid message format');
         }
     }
@@ -295,8 +344,12 @@ class PTSController {
     }
     
     sendMessage(message) {
-        if (this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(message));
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+                this.ws.send(JSON.stringify(message));
+            } catch (error) {
+                console.error(`Error sending message to PTS ${this.ptsId}:`, error.message);
+            }
         }
     }
     
@@ -315,7 +368,7 @@ class PTSController {
     
     // Method to send requests to the PTS controller
     sendRequest(request) {
-        if (this.ws.readyState === WebSocket.OPEN) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.sendMessage(request);
         }
     }
@@ -323,27 +376,60 @@ class PTSController {
 
 // WebSocket connection handling
 wss.on('connection', (ws, req) => {
-    // Extract PTS-specific headers from the upgrade request
-    const ptsId = req.headers['x-pts-id'];
-    const firmwareVersion = req.headers['x-pts-firmware-version-datetime'];
-    const configIdentifier = req.headers['x-pts-configuration-identifier'];
-    
-    if (!ptsId) {
-        console.error('Connection rejected: Missing X-Pts-Id header');
-        ws.close(1008, 'Missing PTS ID');
-        return;
+    try {
+        // Extract PTS-specific headers from the upgrade request
+        const ptsId = req.headers['x-pts-id'];
+        const firmwareVersion = req.headers['x-pts-firmware-version-datetime'];
+        const configIdentifier = req.headers['x-pts-configuration-identifier'];
+        
+        if (!ptsId) {
+            console.error('Connection rejected: Missing X-Pts-Id header');
+            ws.close(1008, 'Missing PTS ID');
+            return;
+        }
+        
+        // Check if controller is already connected
+        if (connectedControllers.has(ptsId)) {
+            console.log(`PTS Controller ${ptsId} already connected, closing old connection`);
+            const oldController = connectedControllers.get(ptsId);
+            oldController.ws.close(1000, 'Replaced by new connection');
+        }
+        
+        // Create PTS controller instance
+        const controller = new PTSController(ws, ptsId, firmwareVersion, configIdentifier);
+        connectedControllers.set(ptsId, controller);
+        
+        // Send welcome message
+        controller.sendMessage({
+            type: 'Welcome',
+            message: 'PTS Controller connected successfully',
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Error handling new connection:', error.message);
+        ws.close(1011, 'Internal server error');
     }
-    
-    // Create PTS controller instance
-    const controller = new PTSController(ws, ptsId, firmwareVersion, configIdentifier);
-    connectedControllers.set(ptsId, controller);
-    
-    // Send welcome message
-    controller.sendMessage({
-        type: 'Welcome',
-        message: 'PTS Controller connected successfully',
-        timestamp: new Date().toISOString()
-    });
+});
+
+// WebSocket server error handling
+wss.on('error', (error) => {
+    console.error('WebSocket server error:', error.message);
+});
+
+// Handle server errors
+server.on('error', (error) => {
+    console.error('HTTP server error:', error.message);
+});
+
+// Handle process errors
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error.message);
+    console.error('Stack:', error.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 // Health check endpoint
@@ -362,7 +448,8 @@ app.get('/controllers', (req, res) => {
         firmwareVersion: connectedControllers.get(ptsId).firmwareVersion,
         configIdentifier: connectedControllers.get(ptsId).configIdentifier,
         isAlive: connectedControllers.get(ptsId).isAlive,
-        lastPing: connectedControllers.get(ptsId).lastPing
+        lastPing: connectedControllers.get(ptsId).lastPing,
+        connectionTime: connectedControllers.get(ptsId).connectionTime
     }));
     
     res.json({
@@ -464,4 +551,6 @@ server.listen(PORT, () => {
     console.log(`Controllers status: http://localhost:${PORT}/controllers`);
     console.log(`Logs endpoint: http://localhost:${PORT}/logs`);
     console.log(`Log files will be saved in: ./logs/`);
+    console.log(`Note: Server is configured to handle PTS controller WebSocket protocol variations`);
+    console.log(`Error handling: RSV1 bit errors are logged but don't crash the server`);
 }); 
