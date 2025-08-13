@@ -238,8 +238,8 @@ class ConnectionDebugger {
 
 // Run diagnostics if this script is executed directly
 if (require.main === module) {
-    const debugger = new ConnectionDebugger();
-    debugger.runDiagnostics();
+    const debuggerInstance = new ConnectionDebugger();
+    debuggerInstance.runDiagnostics();
 }
 
 module.exports = ConnectionDebugger; 
