@@ -459,6 +459,29 @@ app.get('/logs', (req, res) => {
     }
 });
 
+// Get log summary and statistics
+app.get('/logs/summary', (req, res) => {
+    try {
+        const summary = logger.getLogSummary();
+        res.json(summary);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get log summary', details: error.message });
+    }
+});
+
+// Get available message types
+app.get('/logs/types', (req, res) => {
+    try {
+        const messageTypes = logger.getMessageTypes();
+        res.json({
+            messageTypes: messageTypes,
+            count: messageTypes.length
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get message types', details: error.message });
+    }
+});
+
 // Get recent logs for a specific message type
 app.get('/logs/:messageType', (req, res) => {
     try {
@@ -536,6 +559,8 @@ server.listen(PORT, () => {
     console.log(`Health check: http://localhost:${PORT}/health`);
     console.log(`Controllers status: http://localhost:${PORT}/controllers`);
     console.log(`Logs endpoint: http://localhost:${PORT}/logs`);
+    console.log(`Log summary: http://localhost:${PORT}/logs/summary`);
+    console.log(`Message types: http://localhost:${PORT}/logs/types`);
     console.log(`Log files will be saved in: ./logs/`);
     console.log(`Note: Server is configured to handle PTS controller WebSocket protocol variations`);
     console.log(`Error handling: RSV1 bit errors are logged but don't crash the server`);

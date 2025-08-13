@@ -70,32 +70,18 @@ class PTSLogger {
     
     // Log WebSocket errors
     logWebSocketError(ptsId, error) {
-        try {
-            const timestamp = new Date().toISOString();
-            const logFileName = `WebSocketError_${timestamp.split('T')[0]}.log`;
-            const logFilePath = path.join(this.logDir, logFileName);
-            
-            const errorEntry = {
-                timestamp: timestamp,
-                ptsId: ptsId,
-                errorType: 'WebSocket',
-                errorCode: error.code || 'UNKNOWN',
-                errorMessage: error.message || 'Unknown error',
-                stack: error.stack || null,
-                additionalInfo: {
-                    name: error.name,
-                    code: error.code,
-                    statusCode: error['[Symbol(status-code)]']
-                }
-            };
-            
-            const logString = JSON.stringify(errorEntry, null, 2) + '\n' + '-'.repeat(80) + '\n';
-            fs.appendFileSync(logFilePath, logString);
-            
-            console.log(`[${timestamp}] WebSocket error logged to ${logFileName} for PTS ${ptsId}`);
-        } catch (logError) {
-            console.error('Error logging WebSocket error:', logError);
-        }
+        // Use the standard logMessage method for consistency
+        this.logMessage('WebSocketError', ptsId, {
+            errorType: 'WebSocket',
+            errorCode: error.code || 'UNKNOWN',
+            errorMessage: error.message || 'Unknown error',
+            stack: error.stack || null,
+            additionalInfo: {
+                name: error.name,
+                code: error.code,
+                statusCode: error['[Symbol(status-code)]']
+            }
+        });
     }
     
     // Log pump transactions
@@ -155,27 +141,128 @@ class PTSLogger {
     
     // Log protocol violations (like RSV1 errors)
     logProtocolViolation(ptsId, violationType, details) {
+        // Use the standard logMessage method for consistency
+        this.logMessage('ProtocolViolation', ptsId, {
+            violationType: violationType,
+            details: details,
+            severity: 'WARNING',
+            note: 'This is common with PTS controllers and does not affect functionality'
+        });
+    }
+    
+    // Test logging structure (for development/testing)
+    testLogging() {
+        console.log('Testing logging structure...');
+        
+        // Test a protocol violation log
+        this.logProtocolViolation('TEST_PTS_ID', 'RSV1_BIT_SET', {
+            errorCode: 'WS_ERR_UNEXPECTED_RSV_1',
+            errorMessage: 'Test error message',
+            description: 'Test protocol violation',
+            impact: 'Test impact'
+        });
+        
+        // Test a WebSocket error log
+        this.logWebSocketError('TEST_PTS_ID', {
+            code: 'TEST_ERROR',
+            message: 'Test WebSocket error',
+            name: 'TestError'
+        });
+        
+        // Test a connection log
+        this.logConnection('TEST_PTS_ID', {
+            firmwareVersion: 'TEST_FW',
+            configIdentifier: 'TEST_CONFIG',
+            connectionTime: new Date().toISOString()
+        });
+        
+        console.log('Logging test completed. Check the logs directory for test entries.');
+    }
+    
+    // Get log statistics and summary
+    getLogSummary() {
         try {
-            const timestamp = new Date().toISOString();
-            const logFileName = `ProtocolViolation_${timestamp.split('T')[0]}.log`;
-            const logFilePath = path.join(this.logDir, logFileName);
-            
-            const violationEntry = {
-                timestamp: timestamp,
-                ptsId: ptsId,
-                violationType: violationType,
-                details: details,
-                severity: 'WARNING',
-                note: 'This is common with PTS controllers and does not affect functionality'
+            const files = this.getLogFiles();
+            const summary = {
+                totalLogFiles: files.length,
+                messageTypes: {},
+                totalEntries: 0,
+                lastUpdated: null
             };
             
-            const logString = JSON.stringify(violationEntry, null, 2) + '\n' + '-'.repeat(80) + '\n';
-            fs.appendFileSync(logFilePath, logString);
+            files.forEach(file => {
+                try {
+                    const content = fs.readFileSync(path.join(this.logDir, file), 'utf8');
+                    const entries = content.split('-'.repeat(80)).filter(entry => entry.trim());
+                    
+                    // Extract message type from filename
+                    const messageType = file.split('_')[0];
+                    
+                    if (!summary.messageTypes[messageType]) {
+                        summary.messageTypes[messageType] = {
+                            fileCount: 0,
+                            totalEntries: 0,
+                            lastEntry: null
+                        };
+                    }
+                    
+                    summary.messageTypes[messageType].fileCount++;
+                    summary.messageTypes[messageType].totalEntries += entries.length;
+                    summary.totalEntries += entries.length;
+                    
+                    // Get last entry timestamp
+                    if (entries.length > 0) {
+                        try {
+                            const lastEntry = JSON.parse(entries[entries.length - 1].trim());
+                            if (lastEntry.timestamp) {
+                                const entryTime = new Date(lastEntry.timestamp);
+                                if (!summary.lastUpdated || entryTime > summary.lastUpdated) {
+                                    summary.lastUpdated = entryTime;
+                                }
+                                if (!summary.messageTypes[messageType].lastEntry || entryTime > summary.messageTypes[messageType].lastEntry) {
+                                    summary.messageTypes[messageType].lastEntry = entryTime;
+                                }
+                            }
+                        } catch (e) {
+                            // Skip invalid entries
+                        }
+                    }
+                    
+                } catch (error) {
+                    console.error(`Error reading log file ${file}:`, error);
+                }
+            });
             
-            console.log(`[${timestamp}] Protocol violation logged to ${logFileName} for PTS ${ptsId}`);
-        } catch (logError) {
-            console.error('Error logging protocol violation:', logError);
+            return summary;
+        } catch (error) {
+            console.error('Error getting log summary:', error);
+            return {
+                totalLogFiles: 0,
+                messageTypes: {},
+                totalEntries: 0,
+                lastUpdated: null,
+                error: error.message
+            };
         }
+    }
+    
+    // Get all available message types
+    getMessageTypes() {
+        return [
+            'Connection',
+            'Disconnection',
+            'UploadPumpTransaction',
+            'UploadTankMeasurement',
+            'UploadInTankDelivery',
+            'UploadGpsRecord',
+            'UploadAlertRecord',
+            'UploadStatus',
+            'UploadConfiguration',
+            'RequestTagBalance',
+            'Ping',
+            'WebSocketError',
+            'ProtocolViolation'
+        ];
     }
     
     // Get log file paths for monitoring
