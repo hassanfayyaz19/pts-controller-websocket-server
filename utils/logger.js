@@ -139,6 +139,38 @@ class PTSLogger {
         this.logMessage('Disconnection', ptsId, data);
     }
     
+    // Log connection issues and short connections
+    logConnectionIssue(ptsId, issueType, details) {
+        this.logMessage('ConnectionIssue', ptsId, {
+            issueType: issueType,
+            details: details,
+            severity: 'WARNING',
+            timestamp: new Date().toISOString()
+        });
+    }
+    
+    // Log short connections (less than 5 seconds)
+    logShortConnection(ptsId, duration, details) {
+        this.logMessage('ShortConnection', ptsId, {
+            duration: duration,
+            details: details,
+            severity: 'WARNING',
+            potentialCauses: [
+                'WebSocket protocol mismatch',
+                'Authentication failure', 
+                'Network instability',
+                'PTS controller configuration issue',
+                'RSV1 bit errors causing immediate disconnect'
+            ],
+            recommendations: [
+                'Check PTS controller WebSocket configuration',
+                'Verify network connectivity',
+                'Check for protocol compatibility issues',
+                'Review PTS controller logs for errors'
+            ]
+        });
+    }
+    
     // Log protocol violations (like RSV1 errors)
     logProtocolViolation(ptsId, violationType, details) {
         // Use the standard logMessage method for consistency
@@ -261,7 +293,9 @@ class PTSLogger {
             'RequestTagBalance',
             'Ping',
             'WebSocketError',
-            'ProtocolViolation'
+            'ProtocolViolation',
+            'ConnectionIssue',
+            'ShortConnection'
         ];
     }
     

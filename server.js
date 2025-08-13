@@ -40,6 +40,10 @@ class PTSController {
         this.lastPing = Date.now();
         this.pendingRequests = new Map();
         this.connectionTime = Date.now();
+        this.messageCount = 0;
+        this.lastMessageTime = Date.now();
+        
+        console.log(`PTS Controller ${ptsId} constructor called (Firmware: ${firmwareVersion}, Config: ${configIdentifier})`);
         
         // Log connection
         logger.logConnection(ptsId, {
@@ -51,6 +55,11 @@ class PTSController {
         // Set up error handling for WebSocket
         this.ws.on('error', (error) => {
             console.error(`WebSocket error for PTS ${ptsId}:`, error.message);
+            console.error(`Error details:`, {
+                code: error.code,
+                name: error.name,
+                stack: error.stack
+            });
             
             // Log the error but don't crash
             if (error.code === 'WS_ERR_UNEXPECTED_RSV_1') {
@@ -62,6 +71,9 @@ class PTSController {
                     description: 'PTS controller sent WebSocket frame with RSV1 bit set (protocol violation)',
                     impact: 'None - server continues to function normally'
                 });
+                
+                // Don't disconnect for RSV1 errors - this is normal for PTS controllers
+                console.log(`PTS ${ptsId} RSV1 error logged but connection maintained`);
             } else if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
                 console.log(`PTS ${ptsId} connection reset - this is normal for PTS controllers`);
                 // Log connection reset
@@ -77,11 +89,15 @@ class PTSController {
         this.ws.on('pong', () => {
             this.isAlive = true;
             this.lastPing = Date.now();
+            console.log(`PTS ${ptsId} pong received at ${new Date().toISOString()}`);
         });
         
         // Set up message handling
         this.ws.on('message', (data) => {
             try {
+                this.messageCount++;
+                this.lastMessageTime = Date.now();
+                console.log(`PTS ${ptsId} message #${this.messageCount} received at ${new Date().toISOString()}`);
                 this.handleMessage(data);
             } catch (error) {
                 console.error(`Error handling message from PTS ${ptsId}:`, error.message);
@@ -92,11 +108,28 @@ class PTSController {
         // Set up connection close handling
         this.ws.on('close', (code, reason) => {
             const duration = Date.now() - this.connectionTime;
-            console.log(`PTS Controller ${ptsId} disconnected after ${Math.round(duration/1000)}s (Code: ${code}, Reason: ${reason || 'No reason'})`);
+            const durationSeconds = Math.round(duration/1000);
+            
+            console.log(`PTS Controller ${ptsId} disconnected after ${durationSeconds}s (Code: ${code}, Reason: ${reason || 'No reason'})`);
+            console.log(`Connection stats: ${this.messageCount} messages received, last message ${Math.round((Date.now() - this.lastMessageTime)/1000)}s ago`);
+            
+            // If connection was very short, log it as a potential issue
+            if (durationSeconds < 5) {
+                console.warn(`PTS ${ptsId} had very short connection (${durationSeconds}s) - this might indicate a connection issue`);
+                logger.logShortConnection(ptsId, durationSeconds, {
+                    messageCount: this.messageCount,
+                    closeCode: code,
+                    closeReason: reason,
+                    firmwareVersion: this.firmwareVersion,
+                    configIdentifier: this.configIdentifier,
+                    description: 'PTS controller disconnected very quickly after connection'
+                });
+            }
+            
             this.handleDisconnect();
         });
         
-        console.log(`PTS Controller ${ptsId} connected (Firmware: ${firmwareVersion}, Config: ${configIdentifier})`);
+        console.log(`PTS Controller ${ptsId} connection setup completed successfully`);
     }
     
     handleMessage(data) {
@@ -362,9 +395,38 @@ class PTSController {
     }
 }
 
-// WebSocket connection handling
+// WebSocket server error handling
+wss.on('error', (error) => {
+    console.error('WebSocket server error:', error.message);
+    console.error('Error details:', {
+        code: error.code,
+        name: error.name,
+        stack: error.stack
+    });
+});
+
+// Handle individual WebSocket errors
+wss.on('headers', (headers, req) => {
+    console.log(`WebSocket upgrade headers for ${req.socket.remoteAddress}:`, headers);
+});
+
+// Handle WebSocket connection errors
 wss.on('connection', (ws, req) => {
+    // Add connection-level error handling
+    ws.on('error', (error) => {
+        console.error(`Connection-level WebSocket error for ${req.socket.remoteAddress}:`, error.message);
+    });
+    
+    // Add connection-level close handling
+    ws.on('close', (code, reason) => {
+        console.log(`Connection-level close for ${req.socket.remoteAddress}: Code ${code}, Reason: ${reason || 'No reason'}`);
+    });
+    
+    // Continue with existing connection handling...
     try {
+        console.log(`New WebSocket connection attempt from ${req.socket.remoteAddress}`);
+        console.log(`Request headers:`, req.headers);
+        
         // Extract PTS-specific headers from the upgrade request
         const ptsId = req.headers['x-pts-id'];
         const firmwareVersion = req.headers['x-pts-firmware-version-datetime'];
@@ -375,6 +437,13 @@ wss.on('connection', (ws, req) => {
             ws.close(1008, 'Missing PTS ID');
             return;
         }
+        
+        console.log(`PTS Controller ${ptsId} attempting connection with:`, {
+            firmwareVersion,
+            configIdentifier,
+            remoteAddress: req.socket.remoteAddress,
+            userAgent: req.headers['user-agent']
+        });
         
         // Check if controller is already connected
         if (connectedControllers.has(ptsId)) {
@@ -393,15 +462,13 @@ wss.on('connection', (ws, req) => {
             message: 'PTS Controller connected successfully'
         });
         
+        console.log(`PTS Controller ${ptsId} connection established successfully`);
+        
     } catch (error) {
         console.error('Error handling new connection:', error.message);
+        console.error('Error stack:', error.stack);
         ws.close(1011, 'Internal server error');
     }
-});
-
-// WebSocket server error handling
-wss.on('error', (error) => {
-    console.error('WebSocket server error:', error.message);
 });
 
 // Handle server errors
@@ -540,10 +607,31 @@ setInterval(() => {
         const controller = Array.from(connectedControllers.values()).find(c => c.ws === ws);
         if (controller) {
             controller.isAlive = false;
-            ws.ping();
+            try {
+                ws.ping();
+                console.log(`Ping sent to PTS ${controller.ptsId}`);
+            } catch (error) {
+                console.error(`Error pinging PTS ${controller.ptsId}:`, error.message);
+            }
         }
     });
 }, 30000);
+
+// Connection health monitoring
+setInterval(() => {
+    const now = Date.now();
+    connectedControllers.forEach((controller, ptsId) => {
+        const connectionAge = Math.round((now - controller.connectionTime) / 1000);
+        const lastMessageAge = Math.round((now - controller.lastMessageTime) / 1000);
+        
+        console.log(`PTS ${ptsId} health: Age=${connectionAge}s, Messages=${controller.messageCount}, LastMsg=${lastMessageAge}s ago, Alive=${controller.isAlive}`);
+        
+        // If no messages received for a long time, log a warning
+        if (lastMessageAge > 300 && controller.messageCount === 0) { // 5 minutes with no messages
+            console.warn(`PTS ${ptsId} has been connected for ${connectionAge}s but received no messages`);
+        }
+    });
+}, 60000); // Check every minute
 
 // Clean up old log files daily
 setInterval(() => {
