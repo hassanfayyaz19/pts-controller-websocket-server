@@ -12,6 +12,7 @@ A Node.js WebSocket server implementation for communicating with PTS-2 fuel stat
 - **REST API**: HTTP endpoints for monitoring and control
 - **Event Handling**: Processes all PTS-2 data types (transactions, measurements, alerts, etc.)
 - **Comprehensive Logging**: Automatic logging of all incoming data to separate log files by message type
+- **Flexible Configuration**: Environment-based configuration with sensible defaults
 
 ## Supported PTS-2 Message Types
 
@@ -47,11 +48,78 @@ cd pts-controller-websocket-server
 npm install
 ```
 
-3. Create environment configuration (optional):
+3. Configure environment variables:
 ```bash
-cp .env.example .env
+# Copy the example environment file
+cp env.example .env
+
 # Edit .env with your settings
+nano .env
+
+# Or use the setup script
+./setup-env.sh
 ```
+
+## Configuration
+
+### Environment Variables
+
+The server uses environment variables for configuration. Copy `env.example` to `.env` and modify as needed:
+
+#### Essential Settings
+```bash
+# Server configuration
+PORT=3000
+HOST=0.0.0.0
+WS_PATH=/ptsWebSocket
+
+# Logging
+LOG_LEVEL=info
+LOG_ENABLE_FILE=true
+
+# PTS Controller settings
+PTS_PING_INTERVAL=30000
+PTS_CONNECTION_TIMEOUT=30000
+```
+
+#### Production Settings
+```bash
+NODE_ENV=production
+ENABLE_AUTH=true
+JWT_SECRET=your-secure-secret
+ENABLE_HTTPS=true
+CORS_ORIGIN=https://yourdomain.com
+```
+
+#### Optional Features
+```bash
+# Database integration
+DB_TYPE=mongodb
+DB_HOST=localhost
+DB_PORT=27017
+
+# Email notifications
+ENABLE_EMAIL_NOTIFICATIONS=true
+SMTP_HOST=smtp.gmail.com
+
+# Monitoring
+ENABLE_METRICS=true
+METRICS_PORT=9090
+```
+
+For complete configuration options, see:
+- `env.example` - Complete environment variables list
+- `ENV_REFERENCE.md` - Quick reference guide
+- `config.js` - Configuration structure
+
+### Quick Setup
+
+Use the provided setup script:
+```bash
+./setup-env.sh
+```
+
+This will create your `.env` file and provide guidance on next steps.
 
 ## Usage
 
@@ -65,7 +133,7 @@ npm run dev
 npm start
 ```
 
-The server will start on port 3000 (configurable via PORT environment variable).
+The server will start on the configured port (default: 3000).
 
 ### Server Endpoints
 
@@ -168,7 +236,7 @@ node utils/logViewer.js clear
 ```
 
 #### Automatic Log Cleanup
-- Logs are automatically cleaned up after 30 days
+- Logs are automatically cleaned up after 30 days (configurable via `LOG_RETENTION_DAYS`)
 - This prevents disk space issues in long-running deployments
 
 ## PTS-2 Controller Connection
@@ -219,7 +287,7 @@ All messages use JSON format with the following structure:
 
 ### Packet ID Requirements
 
-- Range: 1-65535
+- Range: 1-65535 (configurable via `PTS_MAX_PACKET_ID`)
 - Must be unique per message
 - Server responses must include the same packet ID
 - Controllers will retry messages until confirmed
@@ -258,24 +326,6 @@ All messages use JSON format with the following structure:
     "ullage": 490.0
   }
 }
-```
-
-## Configuration
-
-Edit `config.js` to customize server behavior:
-
-```javascript
-module.exports = {
-  port: 3000,
-  wsPath: '/ptsWebSocket',  // WebSocket endpoint path
-  pts: {
-    maxPacketId: 65535,
-    pingInterval: 30000,
-    connectionTimeout: 30000,
-    maxPtsIdLength: 24
-  }
-  // ... more options
-};
 ```
 
 ## Architecture
@@ -348,10 +398,11 @@ All incoming PTS controller data is automatically logged to separate files:
 ## Production Considerations
 
 ### Security
-- Implement authentication for WebSocket connections
+- Implement authentication for WebSocket connections (`ENABLE_AUTH=true`)
 - Validate PTS controller IDs against whitelist
-- Use HTTPS/WSS in production
-- Implement rate limiting
+- Use HTTPS/WSS in production (`ENABLE_HTTPS=true`)
+- Implement rate limiting (`MAX_CONNECTIONS_PER_IP`, `MAX_MESSAGES_PER_MINUTE`)
+- Change default JWT secret (`JWT_SECRET`)
 
 ### Scalability
 - Use Redis for session management across multiple server instances
@@ -360,7 +411,7 @@ All incoming PTS controller data is automatically logged to separate files:
 - Monitor connection limits and resource usage
 
 ### Data Persistence
-- Store all PTS data in a database
+- Store all PTS data in a database (configure `DB_*` variables)
 - Implement data archival and cleanup
 - Use time-series databases for measurement data
 - Implement backup and recovery procedures
@@ -396,11 +447,18 @@ All incoming PTS controller data is automatically logged to separate files:
    - Verify write permissions for logs directory
    - Monitor log file sizes and rotation
 
+5. **Configuration Issues**
+   - Verify `.env` file exists and is readable
+   - Check environment variable values
+   - Use `./setup-env.sh` to recreate `.env` file
+
 ### Debug Mode
 
 Enable debug logging by setting:
 ```bash
-LOG_LEVEL=debug npm start
+LOG_LEVEL=debug
+DEBUG=true
+VERBOSE_LOGGING=true
 ```
 
 ### Log Analysis
@@ -449,4 +507,7 @@ For issues and questions:
 - Automatic logging system with separate files by message type
 - Command-line log viewer utility
 - Log management and cleanup features
-- Proper WebSocket URI path configuration (`/ptsWebSocket`) 
+- Proper WebSocket URI path configuration (`/ptsWebSocket`)
+- Environment-based configuration system
+- Comprehensive environment variables support
+- Production-ready security and performance options 
