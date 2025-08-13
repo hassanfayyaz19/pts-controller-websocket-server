@@ -45,7 +45,7 @@ class PTSController {
         logger.logConnection(ptsId, {
             firmwareVersion,
             configIdentifier,
-            timestamp: new Date().toISOString()
+            connectionTime: new Date(this.connectionTime).toISOString()
         });
         
         // Set up error handling for WebSocket
@@ -161,8 +161,7 @@ class PTSController {
         // Log the pump transaction data
         logger.logPumpTransaction(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process pump transaction data here
@@ -179,8 +178,7 @@ class PTSController {
         // Log the tank measurement data
         logger.logTankMeasurement(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process tank measurement data here
@@ -195,8 +193,7 @@ class PTSController {
         // Log the in-tank delivery data
         logger.logInTankDelivery(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process in-tank delivery data here
@@ -211,8 +208,7 @@ class PTSController {
         // Log the GPS record data
         logger.logGpsRecord(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process GPS record data here
@@ -227,8 +223,7 @@ class PTSController {
         // Log the alert record data
         logger.logAlertRecord(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process alert record data here
@@ -243,8 +238,7 @@ class PTSController {
         // Log the status update data
         logger.logStatusUpdate(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process status data here
@@ -260,8 +254,7 @@ class PTSController {
         // Log the configuration update data
         logger.logConfigurationUpdate(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process configuration data here
@@ -277,8 +270,7 @@ class PTSController {
         // Log the tag balance request data
         logger.logTagBalanceRequest(this.ptsId, {
             packetId,
-            ...data,
-            timestamp: new Date().toISOString()
+            ...data
         });
         
         // Process tag balance request here
@@ -305,15 +297,13 @@ class PTSController {
         
         // Log the ping data
         logger.logPing(this.ptsId, {
-            packetId,
-            timestamp: new Date().toISOString()
+            packetId
         });
         
         // Respond with Pong
         const response = {
             type: 'Pong',
-            packetId: packetId,
-            timestamp: new Date().toISOString()
+            packetId: packetId
         };
         
         this.sendMessage(response);
@@ -324,8 +314,7 @@ class PTSController {
             type: 'Confirmation',
             packetId: packetId,
             requestType: requestType,
-            success: true,
-            timestamp: new Date().toISOString()
+            success: true
         };
         
         this.sendMessage(response);
@@ -336,8 +325,7 @@ class PTSController {
             type: 'Error',
             packetId: packetId,
             success: false,
-            error: errorMessage,
-            timestamp: new Date().toISOString()
+            error: errorMessage
         };
         
         this.sendMessage(response);
@@ -358,9 +346,9 @@ class PTSController {
         
         // Log disconnection
         logger.logDisconnection(this.ptsId, {
-            timestamp: new Date().toISOString(),
             firmwareVersion: this.firmwareVersion,
-            configIdentifier: this.configIdentifier
+            configIdentifier: this.configIdentifier,
+            connectionDuration: Math.round((Date.now() - this.connectionTime) / 1000) + 's'
         });
         
         connectedControllers.delete(this.ptsId);
@@ -402,8 +390,7 @@ wss.on('connection', (ws, req) => {
         // Send welcome message
         controller.sendMessage({
             type: 'Welcome',
-            message: 'PTS Controller connected successfully',
-            timestamp: new Date().toISOString()
+            message: 'PTS Controller connected successfully'
         });
         
     } catch (error) {
@@ -503,8 +490,7 @@ app.post('/controllers/:ptsId/command', (req, res) => {
         const request = {
             type: command,
             packetId: Math.floor(Math.random() * 65535) + 1,
-            data: data || {},
-            timestamp: new Date().toISOString()
+            data: data || {}
         };
         
         controller.sendRequest(request);

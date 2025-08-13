@@ -18,6 +18,25 @@ class PTSLogger {
         return `${messageType}_${timestamp}.log`;
     }
     
+    // Validate log entry structure
+    validateLogEntry(logEntry) {
+        const requiredFields = ['timestamp', 'ptsId', 'messageType'];
+        const missingFields = requiredFields.filter(field => !logEntry.hasOwnProperty(field));
+        
+        if (missingFields.length > 0) {
+            console.warn(`Log entry missing required fields: ${missingFields.join(', ')}`);
+            return false;
+        }
+        
+        // Check for duplicate timestamp in data
+        if (logEntry.data && logEntry.data.timestamp) {
+            console.warn(`Log entry has duplicate timestamp in data field for ${logEntry.messageType}`);
+            return false;
+        }
+        
+        return true;
+    }
+    
     logMessage(messageType, ptsId, data) {
         try {
             const timestamp = new Date().toISOString();
@@ -31,6 +50,11 @@ class PTSLogger {
                 messageType: messageType,
                 data: data
             };
+            
+            // Validate log entry structure
+            if (!this.validateLogEntry(logEntry)) {
+                console.warn(`Log entry validation failed for ${messageType}`);
+            }
             
             // Convert to JSON string with pretty formatting
             const logString = JSON.stringify(logEntry, null, 2) + '\n' + '-'.repeat(80) + '\n';
