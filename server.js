@@ -9,14 +9,40 @@ const app = express();
 const server = http.createServer(app);
 
 // Create WebSocket server with specific path for PTS controllers
-// Add perMessageDeflate: false to handle compression issues
+// Add aggressive compatibility settings for PTS controllers
 const wss = new WebSocket.Server({ 
     server,
     path: '/ptsWebSocket',
     perMessageDeflate: false,  // Disable compression to avoid protocol issues
     maxPayload: 1024 * 1024,  // 1MB max payload
     skipUTF8Validation: true,  // Skip UTF8 validation for binary data
-    clientTracking: true       // Enable client tracking
+    clientTracking: true,      // Enable client tracking
+    // Add more compatibility options for PTS controllers
+    handleProtocols: (protocols, request) => {
+        console.log('WebSocket protocols requested:', protocols);
+        // Accept any protocol or no protocol
+        return protocols.length > 0 ? protocols[0] : false;
+    },
+    verifyClient: (info) => {
+        console.log('Verifying WebSocket client:', {
+            origin: info.origin,
+            secure: info.secure,
+            req: {
+                url: info.req.url,
+                headers: {
+                    'user-agent': info.req.headers['user-agent'],
+                    'x-pts-id': info.req.headers['x-pts-id'],
+                    'connection': info.req.headers.connection,
+                    'upgrade': info.req.headers.upgrade,
+                    'sec-websocket-version': info.req.headers['sec-websocket-version'],
+                    'sec-websocket-key': info.req.headers['sec-websocket-key']
+                }
+            }
+        });
+        
+        // Always accept the connection but log the details
+        return true;
+    }
 });
 
 // Initialize logger
@@ -28,6 +54,30 @@ app.use(express.json());
 
 // Store connected PTS controllers
 const connectedControllers = new Map();
+
+// Track connection attempts to prevent rapid reconnection loops
+const connectionAttempts = new Map();
+
+// Rate limiting for connections
+function checkConnectionRateLimit(ptsId) {
+    const now = Date.now();
+    const attempts = connectionAttempts.get(ptsId) || [];
+    
+    // Remove attempts older than 1 minute
+    const recentAttempts = attempts.filter(time => now - time < 60000);
+    
+    // If more than 10 attempts in the last minute, rate limit
+    if (recentAttempts.length >= 10) {
+        console.warn(`Rate limiting PTS ${ptsId} - ${recentAttempts.length} attempts in last minute`);
+        return false;
+    }
+    
+    // Add current attempt
+    recentAttempts.push(now);
+    connectionAttempts.set(ptsId, recentAttempts);
+    
+    return true;
+}
 
 // PTS Controller class to manage individual connections
 class PTSController {
@@ -112,6 +162,40 @@ class PTSController {
             
             console.log(`PTS Controller ${ptsId} disconnected after ${durationSeconds}s (Code: ${code}, Reason: ${reason || 'No reason'})`);
             console.log(`Connection stats: ${this.messageCount} messages received, last message ${Math.round((Date.now() - this.lastMessageTime)/1000)}s ago`);
+            
+            // Handle specific close codes
+            if (code === 1006) {
+                console.error(`PTS ${ptsId} - Close code 1006 (abnormal closure) indicates:`);
+                console.error(`  - WebSocket handshake may have failed`);
+                console.error(`  - Network connectivity issues`);
+                console.error(`  - PTS controller rejected the connection`);
+                console.error(`  - Protocol compatibility problems`);
+                
+                // Log detailed connection issue for 1006 errors
+                logger.logConnectionIssue(ptsId, 'ABNORMAL_CLOSURE_1006', {
+                    closeCode: code,
+                    closeReason: reason,
+                    duration: durationSeconds,
+                    messageCount: this.messageCount,
+                    firmwareVersion: this.firmwareVersion,
+                    configIdentifier: this.configIdentifier,
+                    description: 'Connection closed abnormally without close frame',
+                    possibleCauses: [
+                        'WebSocket handshake rejection',
+                        'Network connectivity failure',
+                        'PTS controller protocol incompatibility',
+                        'Firewall or proxy interference',
+                        'WebSocket version mismatch'
+                    ],
+                    troubleshooting: [
+                        'Check PTS controller WebSocket configuration',
+                        'Verify WebSocket path is set to "ptsWebSocket" without leading slash',
+                        'Check network connectivity between PTS and server',
+                        'Review firewall settings',
+                        'Ensure WebSocket version compatibility'
+                    ]
+                });
+            }
             
             // If connection was very short, log it as a potential issue
             if (durationSeconds < 5) {
@@ -438,6 +522,13 @@ wss.on('connection', (ws, req) => {
             return;
         }
         
+        // Check rate limiting
+        if (!checkConnectionRateLimit(ptsId)) {
+            console.error(`Connection rejected: Rate limit exceeded for PTS ${ptsId}`);
+            ws.close(1013, 'Rate limit exceeded - too many connection attempts');
+            return;
+        }
+        
         console.log(`PTS Controller ${ptsId} attempting connection with:`, {
             firmwareVersion,
             configIdentifier,
@@ -449,20 +540,35 @@ wss.on('connection', (ws, req) => {
         if (connectedControllers.has(ptsId)) {
             console.log(`PTS Controller ${ptsId} already connected, closing old connection`);
             const oldController = connectedControllers.get(ptsId);
-            oldController.ws.close(1000, 'Replaced by new connection');
+            try {
+                oldController.ws.close(1000, 'Replaced by new connection');
+            } catch (error) {
+                console.error(`Error closing old connection for ${ptsId}:`, error.message);
+            }
         }
         
-        // Create PTS controller instance
-        const controller = new PTSController(ws, ptsId, firmwareVersion, configIdentifier);
-        connectedControllers.set(ptsId, controller);
-        
-        // Send welcome message
-        controller.sendMessage({
-            type: 'Welcome',
-            message: 'PTS Controller connected successfully'
-        });
-        
-        console.log(`PTS Controller ${ptsId} connection established successfully`);
+        // Add a small delay to help with connection stability
+        setTimeout(() => {
+            try {
+                // Create PTS controller instance
+                const controller = new PTSController(ws, ptsId, firmwareVersion, configIdentifier);
+                connectedControllers.set(ptsId, controller);
+                
+                // Send welcome message after a brief delay
+                setTimeout(() => {
+                    controller.sendMessage({
+                        type: 'Welcome',
+                        message: 'PTS Controller connected successfully'
+                    });
+                }, 100);
+                
+                console.log(`PTS Controller ${ptsId} connection established successfully`);
+                
+            } catch (error) {
+                console.error(`Error creating controller instance for ${ptsId}:`, error.message);
+                ws.close(1011, 'Internal server error during setup');
+            }
+        }, 50); // Small delay to help with connection stability
         
     } catch (error) {
         console.error('Error handling new connection:', error.message);
